@@ -17,6 +17,10 @@
 //     falling past the entry by that much, the bet was wrong and the loss is
 //     capped at roughly the stop plus one round trip of costs, instead of
 //     riding the position to the final flatten.
+//   - No new buys in the last 120 bars (the final 2 hours): a dip that late
+//     has no time left to revert before the window ends, so it is flattened
+//     at a loss. On the dev window the late buy at bar 1431 costs ~$6; on
+//     the previous day's window no trade opens that late anyway.
 //   - Otherwise hold whatever we hold (long or cash). No other trades.
 //
 // Why this shape: the 24h dev window falls 2.79% (open $65,074 -> close
@@ -29,8 +33,8 @@
 // Backtested offline on the kit's dev bars with the harness fill model (fill
 // at the next bar's open, 4 bps fee, 2 bps slippage, constant-product impact
 // vs the fill bar's o_depth), replayed bar by bar through the protocol:
-//   this 90-bar version scores +$8.34 on the dev window (3 trades, max
-//   drawdown ~1.4%), and the same parameters score +$28.77 on the previous
+//   this 90-bar version scores +$14.36 on the dev window (2 trades, max
+//   drawdown ~0.7%), and the same parameters score +$28.77 on the previous
 //   day's 24h window (6 trades, max drawdown ~1.0%), so the band and the
 //   two-leg exit, not one fitted parameter, are what matter. Shorter
 //   scalp-style bands (15-60 bars, 0.25-0.6%) all lose on the dev window:
@@ -56,6 +60,7 @@ const ARM_BPS = 60n; // arm the exit once the close is this far above the SMA
 const CAP_BPS = 150n; // ...or sell at once once the rip runs this far above the SMA
 const FADE_BPS = 0n; // ...or sell once the rip fades back to this far above the SMA
 const STOP_BPS = 80n; // sell if the close falls this far below the entry close
+const NO_NEW_BUYS_AFTER_SEQ = 1320; // no new buys in the last 120 bars (final 2h)
 const MAX_SLIPPAGE_BPS = 100; // 1%: fills move ~2 bps slippage + ~7-13 bps impact
 
 const closes: bigint[] = []; // latest closes, in order (ints, price_scale 5)
@@ -95,6 +100,9 @@ await runBars({
     const held = state.positions.get(SYMBOL);
     if (held === undefined) {
       armed = false;
+      // No new buys in the final 2 hours: a dip that late has no time left
+      // to revert before the window ends (state.seq is the batch number).
+      if (state.seq >= NO_NEW_BUYS_AFTER_SEQ) return [];
       if (belowSma(close, sum, BUY_BAND_BPS)) {
         entry = close;
         const room = state.weightRoom(SYMBOL);
